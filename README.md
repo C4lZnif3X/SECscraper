@@ -21,4 +21,4 @@ A simple, one-click tool to extract financial data from SEC 10-K and 10-Q filing
 - PyInstaller (for `.exe` build)
 
 ## 🔗 GitHub Release
-👉 [Click here to download the Windows executable](https://github.com/C4lZinfi3X/SECscraper/releases/latest)
+[Download the latest release here](https://github.com/C4lZinfi3X/SECscraper/releases/latest/)
