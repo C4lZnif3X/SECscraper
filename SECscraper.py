@@ -1,0 +1,206 @@
+# SEC Financials Streamlit Scraper with Debug Warning for Missing Tags and Fallback Filing Support
+
+import requests
+from bs4 import BeautifulSoup
+import streamlit as st
+import pandas as pd
+import os
+import re
+import uuid
+from dotenv import load_dotenv
+from collections import Counter
+
+# ─── CONFIGURATION ───
+HEADERS = {
+    "User-Agent": "Your.Name.Contact@domain.com",
+    "Accept": "application/xml,text/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://www.sec.gov"
+}
+
+TAG_ALIASES = {
+    "Revenue": ["us-gaap:Revenues", "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"],
+    "Gross Profit": ["us-gaap:GrossProfit"],
+    "Operating Income": ["us-gaap:OperatingIncomeLoss"],
+    "Net Income": ["us-gaap:NetIncomeLoss", "us-gaap:ProfitLoss"],
+    "Assets": ["us-gaap:Assets"],
+    "Current Assets": ["us-gaap:AssetsCurrent"],
+    "Liabilities": ["us-gaap:Liabilities"],
+    "Current Liabilities": ["us-gaap:LiabilitiesCurrent"],
+    "Stockholders Equity": ["us-gaap:StockholdersEquity"],
+    "Cash And Cash Equivalents": ["us-gaap:CashAndCashEquivalentsAtCarryingValue"],
+    "Dividends Paid": ["us-gaap:PaymentsOfDividends", "us-gaap:DividendsCommonStock"],
+    "Shares Outstanding": ["us-gaap:CommonStockSharesOutstanding"]
+}
+
+TAG_PATTERNS = {
+    "Revenue": ["revenue", "sales"],
+    "Gross Profit": ["grossprofit"],
+    "Operating Income": ["operatingincomeloss", "operatingincome"],
+    "Net Income": ["netincome", "profitloss"],
+    "Assets": ["assets"],
+    "Current Assets": ["assetscurrent"],
+    "Liabilities": ["liabilities"],
+    "Current Liabilities": ["liabilitiescurrent"],
+    "Stockholders Equity": ["stockholdersequity", "shareholderequity"],
+    "Cash And Cash Equivalents": ["cashequivalents", "cashandcashequivalents"],
+    "Dividends Paid": ["dividends", "paymentsofdividends"],
+    "Shares Outstanding": ["sharesoutstanding"]
+}
+
+TAG_ORDER = list(TAG_ALIASES.keys()) + ["Dividend Per Share", "Dividend Yield"]
+
+# ─── HELPERS ───
+def get_cik(ticker):
+    url = "https://www.sec.gov/files/company_tickers.json"
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+    data = resp.json()
+    for entry in data.values():
+        if entry['ticker'].lower() == ticker.lower():
+            return str(entry['cik_str']).zfill(10)
+    return None
+
+def get_filing_urls(cik, limit=3):
+    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+    resp = requests.get(url, headers=HEADERS, timeout=10)
+    data = resp.json()
+    filing_urls = []
+    for i, form in enumerate(data["filings"]["recent"]["form"]):
+        if form in ("10-K", "10-Q"):
+            acc = data["filings"]["recent"]["accessionNumber"][i].replace("-", "")
+            filing_urls.append(f"https://www.sec.gov/Archives/edgar/data/{int(cik)}/{acc}/index.json")
+            if len(filing_urls) >= limit:
+                break
+    return filing_urls
+
+def clean_label(label):
+    label = label.replace("us-gaap:", "").replace("_", " ")
+    label = re.sub(r'(?<=[a-z])(?=[A-Z])', ' ', label)
+    label = re.sub(r'(?<=[A-Z])(?=[A-Z][a-z])', ' ', label)
+    label = ' '.join(label.split()).title()
+    return label.strip()
+
+# ─── STREAMLIT SETUP ───
+st.set_page_config(page_title="SEC XBRL Scraper", page_icon="📄", layout="wide")
+st.markdown("""
+    <style>
+    .title-text {
+        font-size: 36px;
+        font-weight: bold;
+        color: #4FC3F7;
+        margin-bottom: 10px;
+    }
+    table.dataframe {
+        font-size: 20px;
+        margin-left: auto;
+        margin-right: auto;
+    }
+    thead th {
+        text-align: center !important;
+        font-size: 22px;
+        color: #444;
+        border-bottom: 2px solid #ccc;
+    }
+    tbody td {
+        text-align: center;
+        padding: 10px;
+    }
+    </style>
+    <div class='title-text'>📊 SEC Financials XBRL Scraper</div>
+""", unsafe_allow_html=True)
+
+with st.sidebar:
+    st.markdown("#### About")
+    st.info("This app scrapes and visualizes the most recent 10-K/10-Q financials for public companies using XBRL filings.")
+
+col1, col2, col3 = st.columns([2, 1, 2])
+with col1:
+    ticker = st.text_input("Enter stock ticker (e.g., AAPL, MSFT):", "INTC", label_visibility="collapsed")
+    st.caption("Enter stock ticker (e.g., AAPL, MSFT):")
+with col2:
+    run_scraper = st.button("Run Scraper")
+with col3:
+    show_debug = st.checkbox("Show Advanced Debug Info")
+
+if run_scraper:
+    cik = get_cik(ticker)
+    if not cik:
+        st.error("CIK not found for ticker")
+        st.stop()
+
+    urls = get_filing_urls(cik)
+    found_data = []
+    found_values = {}
+    missing_labels = []
+
+    for url in urls:
+        filing_index = requests.get(url, headers=HEADERS).json()
+        for file in filing_index["directory"].get("item", []):
+            if file["name"].endswith(".xml") and "cal" not in file["name"]:
+                xml_url = url.replace("index.json", file["name"])
+                xml = requests.get(xml_url, headers=HEADERS).content
+                soup = BeautifulSoup(xml, "lxml")
+
+                for label, aliases in TAG_ALIASES.items():
+                    found = False
+                    for tag in soup.find_all():
+                        if tag.name.lower() in [a.lower() for a in aliases] and tag.get("contextref"):
+                            try:
+                                text = tag.text.strip().replace("$", "").replace(",", "")
+                                value = float(text.replace("(", "-").replace(")", ""))
+                                found_data.append((label, value))
+                                found_values[label] = value
+                                found = True
+                                if show_debug:
+                                    st.text(f"✓ Found: {label} = {value}")
+                                break
+                            except:
+                                continue
+
+                    if not found:
+                        for tag in soup.find_all():
+                            if tag.name and tag.get("contextref") and any(p in tag.name.lower() for p in TAG_PATTERNS.get(label, [])):
+                                try:
+                                    text = tag.text.strip().replace("$", "").replace(",", "")
+                                    value = float(text.replace("(", "-").replace(")", ""))
+                                    found_data.append((label, value))
+                                    found_values[label] = value
+                                    found = True
+                                    if show_debug:
+                                        st.text(f"✓ (Fallback) Found {label} = {value}")
+                                    break
+                                except:
+                                    continue
+
+                    if not found and show_debug:
+                        missing_labels.append(label)
+
+    # Add derived fields
+    if "Dividends Paid" in found_values and "Shares Outstanding" in found_values:
+        dividend_per_share = found_values["Dividends Paid"] / found_values["Shares Outstanding"]
+        found_data.append(("Dividend Per Share", round(dividend_per_share, 2)))
+
+        stock_price_guess = found_values.get("Stockholders Equity", 0) / found_values.get("Shares Outstanding", 1)
+        dividend_yield = dividend_per_share / stock_price_guess if stock_price_guess else 0
+        found_data.append(("Dividend Yield", f"{dividend_yield:.2%}"))
+
+    df = pd.DataFrame(found_data, columns=["Tag", "Value"])
+    df = df.drop_duplicates(subset="Tag")
+    df["Value"] = df.apply(
+        lambda row: f"{int(row['Value']):,}" if row["Tag"] == "Shares Outstanding" and isinstance(row["Value"], (float, int))
+        else (f"${row['Value']:.2f}" if row["Tag"] == "Dividend Per Share" and isinstance(row["Value"], (float, int))
+              else (f"${row['Value']:,.0f}" if isinstance(row["Value"], (float, int)) and not isinstance(row["Value"], str)
+                    else row["Value"])),
+        axis=1
+    )
+    df["Tag"] = pd.Categorical(df["Tag"], categories=TAG_ORDER, ordered=True)
+    df = df.sort_values("Tag").reset_index(drop=True)
+
+    st.success("✅ Data fetched successfully!")
+    st.markdown(df.to_html(index=False, escape=False, classes="dataframe"), unsafe_allow_html=True)
+
+    csv_name = f"{ticker.upper()}_financials.csv"
+    st.download_button("🔵 Download as CSV", data=df.to_csv(index=False, encoding="utf-8-sig"), file_name=csv_name, mime="text/csv")
+
+    if missing_labels and show_debug:
+        st.warning("⚠️ Some expected tags were missing:")
+        st.text("\n".join(missing_labels))
