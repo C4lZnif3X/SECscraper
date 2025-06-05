@@ -9,7 +9,7 @@ A simple, one-click tool to extract financial data from SEC 10-K and 10-Q filing
 - Comes with a prebuilt `.exe` launcher for Windows
 
 ## 🚀 Quick Start
-1. [Download the latest release here](https://github.com/C4lZinfi3X/SECscraper/releases/latest/)
+1. [Download the latest release here](https://github.com/C4lZnif3X/SECscraper/releases/latest)
 2. Run `sec_scraper_launcher.exe`
 3. Enter a stock ticker (e.g. `MSFT`)
 4. Output CSV will be saved in your current directory
@@ -21,7 +21,7 @@ A simple, one-click tool to extract financial data from SEC 10-K and 10-Q filing
 - PyInstaller (for `.exe` build)
 
 ## 🔗 GitHub Release
-👉 [Click here to download the Windows executable](https://github.com/C4lZinfi3X/SECscraper/releases/latest/)
+👉 [Click here to download the Windows executable](https://github.com/C4lZnif3X/SECscraper/releases/latest)
 
 ---
 
